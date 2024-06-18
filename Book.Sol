@@ -1,0 +1,115 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.0;
+
+contract TransactionLog {
+    address public immutable owner; // Owner, immutable
+    mapping(address => bool) public authorizedAddresses; // Autorized Addresses Mapping
+    address[] public authorizedAddressesKeys; // Autorized Keys Massive
+
+    struct ETHDeposited {
+        address ETHKeeper;
+        uint256 amountETHDeposited;
+        uint256 amountETHWithdrawn;
+        uint256 amountETHExact;
+        int256 PNL; // Could be lower then Zero so int
+    }
+
+    struct TransactionLogs {
+        uint256 timestamp;
+        string transactionType;
+        address sender;
+        address recipient;
+        address token;
+        uint256 amount;
+        bool success;
+    }
+
+    mapping(address => ETHDeposited) public ethBalances; // Balance Map
+    TransactionLogs[] public transactions; // Logs Massive
+
+    event Deposit(uint256 timestamp, string transactionType, address indexed sender, address indexed recipient, address token, uint256 amount, bool success); // event Deposit
+    event Withdraw(uint256 timestamp, string transactionType, address indexed sender, address indexed recipient, address token, uint256 amount, bool success); // event Withdraw
+    event Swap(uint256 timestamp, string transactionType, address indexed sender, address indexed recipient, address token, uint256 amount, bool success); // event Swap
+    event Internal(uint256 timestamp, string transactionType, address indexed sender, address indexed recipient, address token, uint256 amount, bool success); // event Internal
+
+    modifier onlyOwner() {
+        require(msg.sender == owner, "Not the contract owner"); //Check if Caller is Owner
+        _;
+    }
+
+    modifier onlyAuthorized() {
+        require(authorizedAddresses[msg.sender] || msg.sender == owner, "Not authorized"); // Check if Caller is autorized
+        _;
+    }
+
+    constructor() {
+        owner = msg.sender; // Set Owner
+        authorizedAddresses[msg.sender] = true; // Autorize Owner
+        authorizedAddressesKeys.push(msg.sender); // Add Owner to Key Massiv
+    }
+
+    function addAuthorizedAddress(address _address) external onlyOwner {
+        if (!authorizedAddresses[_address]) {
+            authorizedAddresses[_address] = true; // Add Autorized
+            authorizedAddressesKeys.push(_address); // Add Address to Key Massive
+        }
+    }
+
+    function removeAuthorizedAddress(address _address) external onlyOwner {
+        require(authorizedAddresses[_address], "Address not authorized"); // Check if autorized
+        authorizedAddresses[_address] = false; // Delete Autorized
+        for (uint256 i = 0; i < authorizedAddressesKeys.length; i++) {
+            if (authorizedAddressesKeys[i] == _address) {
+                authorizedAddressesKeys[i] = authorizedAddressesKeys[authorizedAddressesKeys.length - 1];
+                authorizedAddressesKeys.pop();
+                break;
+            }
+        }
+    }
+
+    function logTransaction(uint256 timestamp, string memory transactionType, address sender, address recipient, address token, uint256 amount, bool success) public onlyAuthorized {
+        transactions.push(TransactionLogs(timestamp, transactionType, sender, recipient, token, amount, success)); // Add transactions to Log
+
+        if (keccak256(abi.encodePacked(transactionType)) == keccak256(abi.encodePacked("Deposit"))) {
+            emit Deposit(timestamp, transactionType, sender, recipient, token, amount, success); // Log Deposit
+            if (success) {
+                ethBalances[recipient].amountETHDeposited += amount;
+                ethBalances[recipient].amountETHExact += amount;
+                updatePNL(recipient);
+            }
+        } else if (keccak256(abi.encodePacked(transactionType)) == keccak256(abi.encodePacked("Withdraw"))) {
+            emit Withdraw(timestamp, transactionType, sender, recipient, token, amount, success); // Log Withdraw
+            if (success) {
+                ethBalances[sender].amountETHWithdrawn += amount;
+                ethBalances[sender].amountETHExact -= amount;
+                updatePNL(sender);
+            }
+        } else if (keccak256(abi.encodePacked(transactionType)) == keccak256(abi.encodePacked("Swap"))) {
+            emit Swap(timestamp, transactionType, sender, recipient, token, amount, success); // Log Swap
+        } else if (keccak256(abi.encodePacked(transactionType)) == keccak256(abi.encodePacked("Internal"))) {
+            emit Internal(timestamp, transactionType, sender, recipient, token, amount, success); // Log Internal
+        }
+    }
+
+    function updatePNL(address _address) internal {
+        ETHDeposited storage balance = ethBalances[_address];
+        balance.PNL = int256(balance.amountETHExact) - int256(balance.amountETHDeposited) - int256(balance.amountETHWithdrawn);
+    }
+
+    function purgeMemory() external onlyOwner {
+        // Kill'em All
+        for (uint256 i = 0; i < authorizedAddressesKeys.length; i++) {
+            authorizedAddresses[authorizedAddressesKeys[i]] = false;
+        }
+        delete authorizedAddressesKeys;
+
+        // Zero - Protocol
+        for (uint256 i = 0; i < transactions.length; i++) {
+            delete ethBalances[transactions[i].sender];
+            delete ethBalances[transactions[i].recipient];
+        }
+
+        // Clean Up
+        delete transactions;
+    }
+}
